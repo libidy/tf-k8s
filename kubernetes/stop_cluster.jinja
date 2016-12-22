@@ -1,0 +1,19 @@
+{%- set namespace = properties["namespace"] -%}
+{%- set worker_replicas = properties["worker_replicas"] -%}
+
+#!/bin/bash
+
+pushd ./k8s_config
+
+for ((i=0; i<{{ worker_replicas }}; i++)); do
+  kubectl delete -f cluster_spec_worker_${i}.yaml
+done
+kubectl delete -f cluster_spec_svc_ps.yaml
+kubectl delete -f nfs.yaml
+if [[ {{ namespace }} != "default" ]]; then
+  if [[ ! $(kubectl get pods --namespace={{ namespace }} | grep NAME &>/dev/null) ]]; then
+    kubectl delete -f namespace.yaml
+  fi
+fi
+
+popd

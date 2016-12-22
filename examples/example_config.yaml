@@ -1,0 +1,12 @@
+kubernetes:
+  namespace: lanlin
+  name: test
+  ps_replicas: 1
+  worker_replicas: 2
+tensorflow:
+  user_model_file: example_user_model.py
+  learning_rate: 0.01
+  max_step: 1e5
+  batch_size: 128
+  optimizer: sgd
+  

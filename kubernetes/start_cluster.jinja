@@ -1,0 +1,69 @@
+{%- set namespace = properties["namespace"] -%}
+{%- set name = properties["name"] -%}
+{%- set worker_replicas = properties["worker_replicas"] -%}
+
+#!/bin/bash
+
+pushd ./k8s_config
+if [[ ! $(kubectl get namespaces | grep {{ namespace }}) ]]; then
+  kubectl create -f namespace.yaml
+fi
+
+mv nfs.yaml nfs.yaml.tmp
+home=${HOME//\//\\/}
+sed "s/HOME_DIR_PLACEHOLDER/${home}/g" nfs.yaml.tmp 1>nfs.yaml 2>/dev/null
+rm nfs.yaml.tmp
+kubectl create -f nfs.yaml
+
+attempt=0
+while true; do
+  nfs_server_cluster_ip=`kubectl get services {{ name }}-nfs-server --namespace={{ namespace }} -o=jsonpath={.spec.clusterIP}`
+  if [[ "$?" == 0 ]]; then
+    break
+  else
+    if (( attempt > 10 )); then
+      echo "Timeout. NFS SERVER ERROR!"
+      exit 2
+    fi
+    attempt=$((attempt+1))
+    sleep 3
+  fi
+done
+
+mv cluster_spec_svc_ps.yaml cluster_spec_svc_ps.yaml.tmp
+sed "s/server:.*$/server: ${nfs_server_cluster_ip}/g" cluster_spec_svc_ps.yaml.tmp 1>cluster_spec_svc_ps.yaml 2>/dev/null
+rm cluster_spec_svc_ps.yaml.tmp
+kubectl create -f cluster_spec_svc_ps.yaml
+
+for ((i=0; i<{{ worker_replicas }}; i++)); do
+  mv cluster_spec_worker_${i}.yaml cluster_spec_worker_${i}.yaml.tmp
+  sed "s/server:.*$/server: ${nfs_server_cluster_ip}/g" cluster_spec_worker_${i}.yaml.tmp 1>cluster_spec_worker_${i}.yaml 2>/dev/null
+  rm cluster_spec_worker_${i}.yaml.tmp
+done
+
+num_gpus_last=`python get_num_gpus.py --out_json "$(kubectl get nodes -o json)"`
+for ((i=0; i<{{ worker_replicas }}; i++)); do
+  if [[ $i == 0 ]]; then
+    kubectl create -f cluster_spec_worker_${i}.yaml
+  else
+    attempt=0
+    while true; do
+    num_gpus_now=`python get_num_gpus.py --out_json "$(kubectl get nodes -o json)"`
+      if [[ ${num_gpus_last} == $((num_gpus_now+1)) ]]; then
+        kubectl create -f cluster_spec_worker_${i}.yaml
+        num_gpus_last=${num_gpus_now}
+        break
+      else
+        if (( attempt > 20 )); then
+          echo "Timeout. WORKER ERROR!"
+          exit 2
+        fi
+        attempt=$((attempt+1))
+        sleep 3
+      fi
+    done
+  fi
+done
+
+
+popd

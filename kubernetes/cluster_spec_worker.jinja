@@ -1,0 +1,83 @@
+{%- set namespace = properties["namespace"] -%}
+{%- set name = properties["name"] -%}
+{%- set image = properties["tf_image"] -%}
+
+{%- set ps_replicas = properties["ps_replicas"] -%}
+{%- set worker_replicas = properties["worker_replicas"] -%}
+{%- set replicas = {"ps": ps_replicas, "worker": worker_replicas} -%}
+
+{%- set index = index -%}
+
+{%- set parameters = properties["parameters"] -%}
+
+{%- set dist_port = properties["dist_port"] -%}
+{%- set nvidia_driver_version = properties["nvidia_driver_version"] -%}
+
+
+{#- Function to get host address -#}
+{%- macro ps_hosts() -%}
+  {%- for i in range(ps_replicas) -%}
+    {%- if not loop.first -%},{%- endif -%}
+    "{{ name }}-ps-{{ i }}:{{ dist_port }}"
+  {%- endfor -%}
+{%- endmacro -%}
+
+{%- macro worker_hosts() -%}
+  {%- for i in range(worker_replicas) -%}
+    {%- if not loop.first -%},{%- endif -%}
+    "{{ name }}-worker-{{ i }}:{{ dist_port }}"
+  {%- endfor -%}
+{%- endmacro -%}
+
+---
+apiVersion: extensions/v1beta1
+kind: Job
+metadata:
+  name: {{ name }}-worker-{{ index }}
+  namespace: {{ namespace }}
+spec:
+  parallelism: 1
+  template:
+    metadata:
+      labels:
+        name: {{ name }}
+        job: worker
+        task: "{{ index }}"
+    spec:
+      volumes:
+      - name: nvidia-driver
+        hostPath:
+          path: /var/lib/nvidia-docker/volumes/nvidia_driver/{{ nvidia_driver_version }}
+      - name: nfs
+        nfs:
+          server: NFS_SERVER_PLACEHOLDER
+          path: /exports
+      restartPolicy: Never
+      containers:
+      - name: tensorflow
+        image: {{ image }}
+{%- for key, value in parameters -%}
+{%- if loop.first %}
+        args:
+{%- endif %}
+        - "--{{ key }} {{ value }}"
+{%- endfor %}
+        ports:
+        - containerPort: {{ dist_port }}
+        env:
+        - name: CLUSTER_SPEC
+          value: '{"ps": [{{ ps_hosts() }}], "worker": [{{ worker_hosts() }}]}'
+        - name: JOB_NAME
+          value: worker
+        - name: TASK_INDEX
+          value: "{{ index }}"
+        resources:
+          limits:
+            alpha.kubernetes.io/nvidia-gpu: 1
+        volumeMounts:
+        - name: nvidia-driver
+          mountPath: /usr/local/nvidia/
+          readOnly: true
+        - name: nfs
+          mountPath: /mnt
+
